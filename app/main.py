@@ -11,13 +11,11 @@ logging.basicConfig(level=logging.INFO)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
-TARGET_CHAT_ID = os.getenv("TARGET_CHAT_ID")
 BASE_URL = os.getenv("BASE_URL")
 
 for env_name, value in (
     ("BOT_TOKEN", BOT_TOKEN),
     ("WEBHOOK_SECRET", WEBHOOK_SECRET),
-    ("TARGET_CHAT_ID", TARGET_CHAT_ID),
 ):
     if not value:
         raise RuntimeError(f"Environment variable {env_name} is required.")
@@ -70,12 +68,9 @@ def format_for_markdown_v2(text: str) -> str:
     return "".join(result)
 
 
-async def forward_text_to_chat(text: str) -> None:
-    if not text:
-        return
-
+async def forward_text_to_chat(chat_id: int, text: str) -> None:
     payload = {
-        "chat_id": TARGET_CHAT_ID,
+        "chat_id": chat_id,
         "text": format_for_markdown_v2(text),
         "parse_mode": "MarkdownV2",
     }
@@ -101,6 +96,22 @@ def extract_text(update: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+def extract_chat_id(update: Dict[str, Any]) -> Optional[int]:
+    """Get chat_id from common Telegram update payloads."""
+    for key in ("message", "edited_message", "channel_post", "edited_channel_post"):
+        message: Optional[Dict[str, Any]] = update.get(key)
+        if not message:
+            continue
+        chat = message.get("chat") or {}
+        chat_id = chat.get("id")
+        if chat_id is not None:
+            try:
+                return int(chat_id)
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
 @app.get("/healthz")
 async def healthz() -> Dict[str, str]:
     return {"status": "ok"}
@@ -114,8 +125,9 @@ async def telegram_webhook(request: Request, background_tasks: BackgroundTasks) 
 
     update = await request.json()
     text = extract_text(update)
+    chat_id = extract_chat_id(update)
 
-    if text:
-        background_tasks.add_task(forward_text_to_chat, text)
+    if text and chat_id is not None:
+        background_tasks.add_task(forward_text_to_chat, chat_id, text)
 
     return {"ok": True}

@@ -6,7 +6,6 @@
 
 - `BOT_TOKEN` — токен бота.
 - `WEBHOOK_SECRET` — секрет для заголовка `X-Telegram-Bot-Api-Secret-Token`.
-- `TARGET_CHAT_ID` — chat_id, куда пересылать сообщения.
 - `BASE_URL` — публичный URL сервиса на Render, например `https://<service>.onrender.com` (нужно для установки webhook).
 
 ## Запуск локально
@@ -25,7 +24,7 @@ uvicorn app.main:app --host 0.0.0.0 --port %PORT%
 
 - Build Command: `pip install -r requirements.txt`
 - Start Command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
-- Убедитесь, что заданы `BOT_TOKEN`, `WEBHOOK_SECRET`, `TARGET_CHAT_ID`, `BASE_URL`.
+- Убедитесь, что заданы `BOT_TOKEN`, `WEBHOOK_SECRET`, `BASE_URL`.
 
 ## Установка webhook
 
@@ -45,6 +44,6 @@ curl "https://api.telegram.org/bot${BOT_TOKEN}/getWebhookInfo"
 
 ## Формат сообщений
 
-- Бот отправляет сообщения с `parse_mode=MarkdownV2`.
+- Бот отправляет сообщения с `parse_mode=MarkdownV2` в тот же чат, откуда получил текст.
 - Спецсимволы автоматически экранируются, голые ссылки превращаются в кликабельные.
 - Запись вида `**текст**` конвертируется в жирный шрифт.
