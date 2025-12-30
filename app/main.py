@@ -1,13 +1,24 @@
 import logging
 import os
 import re
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 import httpx
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    load_dotenv = None
+
 
 logging.basicConfig(level=logging.INFO)
+
+if load_dotenv:
+    env_file = Path(".env")
+    if env_file.exists():
+        load_dotenv(env_file)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
@@ -35,13 +46,8 @@ def escape_markdown_v2(text: str) -> str:
     return _ESCAPE_PATTERN.sub(r"\\\1", text)
 
 
-def format_for_markdown_v2(text: str) -> str:
-    """
-    Prepare text for Telegram MarkdownV2:
-    - escape special characters
-    - make bare URLs clickable
-    - support **bold** (converted to Telegram *bold*)
-    """
+def _format_inline(text: str) -> str:
+    """Escape text and convert basic inline tokens (bold, bare URLs)."""
     result: list[str] = []
     last_index = 0
 
@@ -66,6 +72,41 @@ def format_for_markdown_v2(text: str) -> str:
         result.append(escape_markdown_v2(text[last_index:]))
 
     return "".join(result)
+
+
+def format_for_markdown_v2(text: str) -> str:
+    """
+    Prepare text for Telegram MarkdownV2:
+    - headings: "# " -> bold+underline, "## " -> bold (each from new line)
+    - escape special characters
+    - make bare URLs clickable
+    - support **bold** (converted to Telegram *bold*)
+    """
+    lines = text.splitlines(keepends=True)
+    formatted_lines: list[str] = []
+
+    for line in lines:
+        newline = ""
+        content = line
+        if line.endswith("\r\n"):
+            content = line[:-2]
+            newline = "\r\n"
+        elif line.endswith("\n") or line.endswith("\r"):
+            content = line[:-1]
+            newline = line[-1]
+
+        if content.startswith("# "):
+            inner = _format_inline(content[2:].lstrip())
+            formatted = f"__*{inner}*__"
+        elif content.startswith("## "):
+            inner = _format_inline(content[3:].lstrip())
+            formatted = f"*{inner}*"
+        else:
+            formatted = _format_inline(content)
+
+        formatted_lines.append(f"{formatted}{newline}")
+
+    return "".join(formatted_lines)
 
 
 async def forward_text_to_chat(chat_id: int, text: str) -> None:
