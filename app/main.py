@@ -126,23 +126,26 @@ def format_for_markdown_v2(text: str) -> str:
 
 
 async def forward_text_to_chat(chat_id: int, text: str) -> None:
+    formatted = format_for_markdown_v2(text)
+
     if DRY_RUN:
-        formatted = format_for_markdown_v2(text)
         logging.info("DRY_RUN enabled. chat_id=%s, formatted_text=%s", chat_id, formatted)
         return
 
-    payload = {
-        "chat_id": chat_id,
-        "text": format_for_markdown_v2(text),
-        "parse_mode": "MarkdownV2",
-    }
+    for chunk in split_message(formatted):
+        payload = {
+            "chat_id": chat_id,
+            "text": chunk,
+            "parse_mode": "MarkdownV2",
+        }
 
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.post(TELEGRAM_API_URL, json=payload)
-            response.raise_for_status()
-    except httpx.HTTPError as exc:
-        logging.exception("Failed to send message to Telegram: %s", exc)
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                response = await client.post(TELEGRAM_API_URL, json=payload)
+                response.raise_for_status()
+        except httpx.HTTPError as exc:
+            logging.exception("Failed to send message to Telegram: %s", exc)
+            break
 
 
 def extract_text(update: Dict[str, Any]) -> Optional[str]:
@@ -172,6 +175,35 @@ def extract_chat_id(update: Dict[str, Any]) -> Optional[int]:
             except (TypeError, ValueError):
                 return None
     return None
+
+
+def split_message(text: str, limit: int = 4096) -> list[str]:
+    """Split text into Telegram-sized chunks, preferring line boundaries."""
+    chunks: list[str] = []
+    current = ""
+
+    for line in text.splitlines(keepends=True):
+        if len(current) + len(line) <= limit:
+            current += line
+            continue
+
+        if current:
+            chunks.append(current)
+            current = ""
+
+        if len(line) <= limit:
+            current = line
+        else:
+            start = 0
+            while start < len(line):
+                end = min(start + limit, len(line))
+                chunks.append(line[start:end])
+                start = end
+
+    if current:
+        chunks.append(current)
+
+    return chunks
 
 
 @app.get("/healthz")
