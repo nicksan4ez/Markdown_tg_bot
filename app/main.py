@@ -99,7 +99,7 @@ def _format_inline(text: str) -> str:
 def _format_line(content: str) -> str:
     stripped = content.strip()
     if stripped == "---":
-        return "=========="
+        return r"\=\=\=\=\=\=\=\=\=\="
     if content.startswith("# "):
         inner = _format_inline(content[2:].lstrip())
         return f"__*{inner}*__"
@@ -166,7 +166,29 @@ async def send_chunks(chat_id: int, chunks: list[str]) -> None:
                 break
 
 
-async def handle_message(chat_id: int, text: str) -> None:
+def format_sender(sender: Dict[str, Any], chat_id: int) -> str:
+    username = sender.get("username")
+    first_name = sender.get("first_name")
+    last_name = sender.get("last_name")
+
+    name_parts = [part for part in (first_name, last_name) if part]
+    display = " ".join(name_parts).strip()
+
+    if username:
+        if display:
+            display = f"{display} (@{username})"
+        else:
+            display = f"@{username}"
+
+    return display or f"user {chat_id}"
+
+
+def format_log_entry(kind: str, chat_id: int, sender: Dict[str, Any], formatted_text: str) -> str:
+    prefix = f"{kind} {format_sender(sender, chat_id)} ({chat_id})"
+    return f"{escape_markdown_v2(prefix)}\n{formatted_text}"
+
+
+async def handle_message(chat_id: int, sender: Dict[str, Any], text: str) -> None:
     formatted = format_for_markdown_v2(text)
     chunks = split_message(formatted)
 
@@ -179,38 +201,53 @@ async def handle_message(chat_id: int, text: str) -> None:
         )
         return
 
-    await send_chunks(LOGS_CHAT_ID_INT, chunks)
+    log_in = format_log_entry("IN", chat_id, sender, formatted)
+    await send_chunks(LOGS_CHAT_ID_INT, split_message(log_in))
     await send_chunks(chat_id, chunks)
-    await send_chunks(LOGS_CHAT_ID_INT, chunks)
+    log_out = format_log_entry("OUT", chat_id, sender, formatted)
+    await send_chunks(LOGS_CHAT_ID_INT, split_message(log_out))
 
 
-def extract_text(update: Dict[str, Any]) -> Optional[str]:
-    """Extract text or caption from common Telegram update payloads."""
+def extract_message(update: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Get the message object from common Telegram update payloads."""
     for key in ("message", "edited_message", "channel_post", "edited_channel_post"):
-        message: Optional[Dict[str, Any]] = update.get(key)
-        if not message:
-            continue
-        if "text" in message:
-            return str(message["text"])
-        if "caption" in message:
-            return str(message["caption"])
+        message = update.get(key)
+        if message:
+            return message
     return None
 
 
-def extract_chat_id(update: Dict[str, Any]) -> Optional[int]:
-    """Get chat_id from common Telegram update payloads."""
-    for key in ("message", "edited_message", "channel_post", "edited_channel_post"):
-        message: Optional[Dict[str, Any]] = update.get(key)
-        if not message:
-            continue
-        chat = message.get("chat") or {}
-        chat_id = chat.get("id")
-        if chat_id is not None:
-            try:
-                return int(chat_id)
-            except (TypeError, ValueError):
-                return None
+def extract_text(message: Dict[str, Any]) -> Optional[str]:
+    """Extract text or caption from a Telegram message."""
+    if "text" in message:
+        return str(message["text"])
+    if "caption" in message:
+        return str(message["caption"])
     return None
+
+
+def extract_chat_info(message: Dict[str, Any]) -> tuple[Optional[int], Optional[str]]:
+    """Get chat_id and chat_type from a Telegram message."""
+    chat = message.get("chat") or {}
+    chat_id = chat.get("id")
+    chat_type = chat.get("type")
+    if chat_id is not None:
+        try:
+            return int(chat_id), str(chat_type) if chat_type is not None else None
+        except (TypeError, ValueError):
+            return None, str(chat_type) if chat_type is not None else None
+    return None, str(chat_type) if chat_type is not None else None
+
+
+def extract_sender(message: Dict[str, Any]) -> Dict[str, Any]:
+    """Get sender details from a Telegram message."""
+    sender = message.get("from") or {}
+    return {
+        "id": sender.get("id"),
+        "username": sender.get("username"),
+        "first_name": sender.get("first_name"),
+        "last_name": sender.get("last_name"),
+    }
 
 
 def split_message(text: str, limit: int = 4096) -> list[str]:
@@ -254,10 +291,18 @@ async def telegram_webhook(request: Request, background_tasks: BackgroundTasks) 
         raise HTTPException(status_code=403, detail="Forbidden")
 
     update = await request.json()
-    text = extract_text(update)
-    chat_id = extract_chat_id(update)
+    message = extract_message(update)
+    if not message:
+        return {"ok": True}
+
+    text = extract_text(message)
+    chat_id, chat_type = extract_chat_info(message)
+    sender = extract_sender(message)
+
+    if chat_type != "private":
+        return {"ok": True}
 
     if text and chat_id is not None:
-        background_tasks.add_task(handle_message, chat_id, text)
+        background_tasks.add_task(handle_message, chat_id, sender, text)
 
     return {"ok": True}
