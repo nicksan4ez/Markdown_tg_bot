@@ -45,7 +45,9 @@ _ESCAPE_PATTERN = re.compile(f"([{re.escape(MARKDOWN_V2_SPECIAL_CHARS)}])")
 _URL_ESCAPE_PATTERN = re.compile(r"([)\\])")
 _TOKEN_PATTERN = re.compile(
     r"(?P<link>\[(?P<link_text>[^\]]+)\]\((?P<link_url>https?://[^\s)]+)\))"
+    r"|(?P<code>`(?P<code_text>[^`]+)`)"
     r"|(?P<bold>\*\*(?P<bold_text>.+?)\*\*)"
+    r"|(?P<italic>(?<!\*)\*(?P<italic_text>[^*\n]+?)\*(?!\*))"
     r"|(?P<url>https?://\S+)",
     re.IGNORECASE,
 )
@@ -63,6 +65,11 @@ def escape_markdown_v2_url(url: str) -> str:
     return _URL_ESCAPE_PATTERN.sub(r"\\\1", url)
 
 
+def escape_markdown_v2_code(text: str) -> str:
+    """Escape characters that have special meaning in MarkdownV2 code spans."""
+    return text.replace("\\", "\\\\").replace("`", "\\`")
+
+
 def _format_inline(text: str) -> str:
     """Escape text and convert basic inline tokens (bold, links, bare URLs)."""
     result: list[str] = []
@@ -77,16 +84,24 @@ def _format_inline(text: str) -> str:
         link_url = match.group("link_url")
         url = match.group("url")
         bold_text = match.group("bold_text")
+        italic_text = match.group("italic_text")
+        code_text = match.group("code_text")
 
         if link_text and link_url:
             display = escape_markdown_v2(link_text)
             result.append(f"[{display}]({escape_markdown_v2_url(link_url)})")
+        elif code_text:
+            inner = escape_markdown_v2_code(code_text)
+            result.append(f"`{inner}`")
         elif url:
             display = escape_markdown_v2(url)
             result.append(f"[{display}]({escape_markdown_v2_url(url)})")
         elif bold_text:
             inner = escape_markdown_v2(bold_text)
             result.append(f"*{inner}*")
+        elif italic_text:
+            inner = escape_markdown_v2(italic_text)
+            result.append(f"_{inner}_")
 
         last_index = end
 
@@ -197,13 +212,14 @@ def _utf16_offset_to_index(text: str, offset: int) -> int:
     return len(text)
 
 
-def apply_bold_entities(text: str, entities: Optional[list[Dict[str, Any]]]) -> str:
-    if not entities or "**" in text:
+def apply_entities(text: str, entities: Optional[list[Dict[str, Any]]]) -> str:
+    if not entities or "**" in text or "*" in text:
         return text
 
     inserts: list[tuple[int, str]] = []
     for entity in entities:
-        if entity.get("type") != "bold":
+        entity_type = entity.get("type")
+        if entity_type not in {"bold", "italic"}:
             continue
         offset = entity.get("offset")
         length = entity.get("length")
@@ -211,13 +227,14 @@ def apply_bold_entities(text: str, entities: Optional[list[Dict[str, Any]]]) -> 
             continue
         start = _utf16_offset_to_index(text, offset)
         end = _utf16_offset_to_index(text, offset + length)
-        inserts.append((end, "**"))
-        inserts.append((start, "**"))
+        marker = "**" if entity_type == "bold" else "*"
+        inserts.append((end, marker))
+        inserts.append((start, marker))
 
     if not inserts:
         return text
 
-    inserts.sort(key=lambda item: item[0], reverse=True)
+    inserts.sort(key=lambda item: (item[0], len(item[1])), reverse=True)
     result = text
     for position, marker in inserts:
         result = result[:position] + marker + result[position:]
@@ -341,7 +358,7 @@ async def telegram_webhook(request: Request, background_tasks: BackgroundTasks) 
         return {"ok": True}
 
     if text and chat_id is not None:
-        text = apply_bold_entities(text, entities)
+        text = apply_entities(text, entities)
         background_tasks.add_task(handle_message, chat_id, sender, text)
 
     return {"ok": True}
