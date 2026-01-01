@@ -96,6 +96,25 @@ def _format_inline(text: str) -> str:
     return "".join(result)
 
 
+def _format_line(content: str) -> str:
+    stripped = content.strip()
+    if stripped == "---":
+        return "=========="
+    if content.startswith("# "):
+        inner = _format_inline(content[2:].lstrip())
+        return f"__*{inner}*__"
+    if content.startswith("## "):
+        inner = _format_inline(content[3:].lstrip())
+        return f"*{inner}*"
+    if content.startswith("### "):
+        inner = _format_inline(content[4:].lstrip())
+        return f"__{inner}__"
+    if content.startswith(("- ", "* ")):
+        rest = content[2:]
+        return f"— {_format_inline(rest)}"
+    return _format_inline(content)
+
+
 def format_for_markdown_v2(text: str) -> str:
     """
     Prepare text for Telegram MarkdownV2:
@@ -117,7 +136,7 @@ def format_for_markdown_v2(text: str) -> str:
             content = line[:-1]
             newline = line[-1]
 
-        formatted_lines.append(f"{_format_inline(content)}{newline}")
+        formatted_lines.append(f"{_format_line(content)}{newline}")
 
     return "".join(formatted_lines)
 
