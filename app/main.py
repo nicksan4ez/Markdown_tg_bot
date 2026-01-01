@@ -140,6 +140,7 @@ def format_for_markdown_v2(text: str) -> str:
     """
     lines = text.splitlines(keepends=True)
     formatted_lines: list[str] = []
+    in_code_block = False
 
     for line in lines:
         newline = ""
@@ -150,6 +151,15 @@ def format_for_markdown_v2(text: str) -> str:
         elif line.endswith("\n") or line.endswith("\r"):
             content = line[:-1]
             newline = line[-1]
+
+        if content.strip().startswith("```"):
+            in_code_block = not in_code_block
+            formatted_lines.append(f"{content}{newline}")
+            continue
+
+        if in_code_block:
+            formatted_lines.append(f"{escape_markdown_v2_code(content)}{newline}")
+            continue
 
         formatted_lines.append(f"{_format_line(content)}{newline}")
 
@@ -172,7 +182,7 @@ def build_help_text() -> str:
         "## Примеры\n"
         "- **жирный текст**\n"
         "- *курсив*\n"
-        "- `netstat -aon | findstr :8188`\n"
+        "- `super code`\n"
         "- [Ссылка](https://t.me/mark_down_robot)\n"
         "- --- (разделитель)\n"
     )
@@ -235,13 +245,16 @@ def _utf16_offset_to_index(text: str, offset: int) -> int:
 
 
 def apply_entities(text: str, entities: Optional[list[Dict[str, Any]]]) -> str:
-    if not entities or "**" in text or "*" in text:
+    if not entities:
         return text
+
+    has_double_ast = "**" in text
+    has_single_ast = "*" in text
 
     inserts: list[tuple[int, str]] = []
     for entity in entities:
         entity_type = entity.get("type")
-        if entity_type not in {"bold", "italic"}:
+        if entity_type not in {"bold", "italic", "code", "pre"}:
             continue
         offset = entity.get("offset")
         length = entity.get("length")
@@ -249,9 +262,24 @@ def apply_entities(text: str, entities: Optional[list[Dict[str, Any]]]) -> str:
             continue
         start = _utf16_offset_to_index(text, offset)
         end = _utf16_offset_to_index(text, offset + length)
-        marker = "**" if entity_type == "bold" else "*"
-        inserts.append((end, marker))
-        inserts.append((start, marker))
+        if entity_type == "bold":
+            if has_double_ast:
+                continue
+            marker = "**"
+            inserts.append((end, marker))
+            inserts.append((start, marker))
+        elif entity_type == "italic":
+            if has_single_ast:
+                continue
+            marker = "*"
+            inserts.append((end, marker))
+            inserts.append((start, marker))
+        elif entity_type == "code":
+            inserts.append((end, "`"))
+            inserts.append((start, "`"))
+        elif entity_type == "pre":
+            inserts.append((end, "\n```"))
+            inserts.append((start, "```\n"))
 
     if not inserts:
         return text
