@@ -156,6 +156,28 @@ def format_for_markdown_v2(text: str) -> str:
     return "".join(formatted_lines)
 
 
+def is_command(text: str, command: str) -> bool:
+    token = text.strip().split(maxsplit=1)[0]
+    if not token.startswith("/"):
+        return False
+    token = token.split("@", 1)[0]
+    return token == command
+
+
+def build_help_text() -> str:
+    return (
+        "# Быстрый старт\n"
+        "Я пересылаю ваш текст обратно и конвертирую Markdown в Telegram MarkdownV2.\n"
+        "\n"
+        "## Примеры\n"
+        "- **жирный текст**\n"
+        "- *курсив*\n"
+        "- `netstat -aon | findstr :8188`\n"
+        "- [Ссылка](https://t.me/mark_down_robot)\n"
+        "- --- (разделитель)\n"
+    )
+
+
 async def send_chunks(chat_id: int, chunks: list[str]) -> None:
     async with httpx.AsyncClient(timeout=10) as client:
         for chunk in chunks:
@@ -359,6 +381,10 @@ async def telegram_webhook(request: Request, background_tasks: BackgroundTasks) 
 
     if text and chat_id is not None:
         text = apply_entities(text, entities)
-        background_tasks.add_task(handle_message, chat_id, sender, text)
+        if is_command(text, "/start") or is_command(text, "/help"):
+            help_text = build_help_text()
+            background_tasks.add_task(handle_message, chat_id, sender, help_text)
+        else:
+            background_tasks.add_task(handle_message, chat_id, sender, text)
 
     return {"ok": True}
