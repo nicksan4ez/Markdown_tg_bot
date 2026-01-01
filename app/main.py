@@ -188,6 +188,42 @@ def format_log_entry(kind: str, chat_id: int, sender: Dict[str, Any], formatted_
     return f"{escape_markdown_v2(prefix)}\n{formatted_text}"
 
 
+def _utf16_offset_to_index(text: str, offset: int) -> int:
+    count = 0
+    for index, ch in enumerate(text):
+        if count >= offset:
+            return index
+        count += 2 if ord(ch) > 0xFFFF else 1
+    return len(text)
+
+
+def apply_bold_entities(text: str, entities: Optional[list[Dict[str, Any]]]) -> str:
+    if not entities or "**" in text:
+        return text
+
+    inserts: list[tuple[int, str]] = []
+    for entity in entities:
+        if entity.get("type") != "bold":
+            continue
+        offset = entity.get("offset")
+        length = entity.get("length")
+        if not isinstance(offset, int) or not isinstance(length, int):
+            continue
+        start = _utf16_offset_to_index(text, offset)
+        end = _utf16_offset_to_index(text, offset + length)
+        inserts.append((end, "**"))
+        inserts.append((start, "**"))
+
+    if not inserts:
+        return text
+
+    inserts.sort(key=lambda item: item[0], reverse=True)
+    result = text
+    for position, marker in inserts:
+        result = result[:position] + marker + result[position:]
+    return result
+
+
 async def handle_message(chat_id: int, sender: Dict[str, Any], text: str) -> None:
     formatted = format_for_markdown_v2(text)
     chunks = split_message(formatted)
@@ -217,13 +253,15 @@ def extract_message(update: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return None
 
 
-def extract_text(message: Dict[str, Any]) -> Optional[str]:
-    """Extract text or caption from a Telegram message."""
+def extract_text_and_entities(
+    message: Dict[str, Any],
+) -> tuple[Optional[str], Optional[list[Dict[str, Any]]]]:
+    """Extract text/caption and entities from a Telegram message."""
     if "text" in message:
-        return str(message["text"])
+        return str(message["text"]), message.get("entities")
     if "caption" in message:
-        return str(message["caption"])
-    return None
+        return str(message["caption"]), message.get("caption_entities")
+    return None, None
 
 
 def extract_chat_info(message: Dict[str, Any]) -> tuple[Optional[int], Optional[str]]:
@@ -295,7 +333,7 @@ async def telegram_webhook(request: Request, background_tasks: BackgroundTasks) 
     if not message:
         return {"ok": True}
 
-    text = extract_text(message)
+    text, entities = extract_text_and_entities(message)
     chat_id, chat_type = extract_chat_info(message)
     sender = extract_sender(message)
 
@@ -303,6 +341,7 @@ async def telegram_webhook(request: Request, background_tasks: BackgroundTasks) 
         return {"ok": True}
 
     if text and chat_id is not None:
+        text = apply_bold_entities(text, entities)
         background_tasks.add_task(handle_message, chat_id, sender, text)
 
     return {"ok": True}
