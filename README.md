@@ -11,11 +11,12 @@
 ## Запуск локально
 
 ```bash
-python -m venv .venv
-. .venv/Scripts/activate  # Windows PowerShell: .\.venv\Scripts\Activate.ps1
+python3 -m venv .venv
+source .venv/Scripts/activate  # Windows PowerShell: .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-set PORT=8000  # или export PORT=8000 в Linux/macOS
-uvicorn app.main:app --host 0.0.0.0 --port %PORT%
+export PORT=8000  # или set PORT=8000 - в Windows
+uvicorn app.main:app --host 0.0.0.0 --port $PORT
+# uvicorn app.main:app --host 0.0.0.0 --port %PORT% - в Windows
 ```
 
 Проверить, что сервис жив: `curl http://localhost:8000/healthz`.

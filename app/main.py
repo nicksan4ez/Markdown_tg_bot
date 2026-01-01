@@ -23,6 +23,7 @@ if load_dotenv:
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
 BASE_URL = os.getenv("BASE_URL")
+DRY_RUN = os.getenv("DRY_RUN", "").lower() in {"1", "true", "yes"}
 
 for env_name, value in (
     ("BOT_TOKEN", BOT_TOKEN),
@@ -35,7 +36,10 @@ TELEGRAM_API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 MARKDOWN_V2_SPECIAL_CHARS = r"_*[]()~`>#+-=|{}.!\\"
 _ESCAPE_PATTERN = re.compile(f"([{re.escape(MARKDOWN_V2_SPECIAL_CHARS)}])")
 _TOKEN_PATTERN = re.compile(
-    r"(?P<bold>\*\*(?P<bold_text>.+?)\*\*)|(?P<url>https?://\S+)", re.IGNORECASE
+    r"(?P<link>\[(?P<link_text>[^\]]+)\]\((?P<link_url>https?://[^\s)]+)\))"
+    r"|(?P<bold>\*\*(?P<bold_text>.+?)\*\*)"
+    r"|(?P<url>https?://\S+)",
+    re.IGNORECASE,
 )
 
 app = FastAPI()
@@ -47,7 +51,7 @@ def escape_markdown_v2(text: str) -> str:
 
 
 def _format_inline(text: str) -> str:
-    """Escape text and convert basic inline tokens (bold, bare URLs)."""
+    """Escape text and convert basic inline tokens (bold, links, bare URLs)."""
     result: list[str] = []
     last_index = 0
 
@@ -56,10 +60,15 @@ def _format_inline(text: str) -> str:
         if start > last_index:
             result.append(escape_markdown_v2(text[last_index:start]))
 
+        link_text = match.group("link_text")
+        link_url = match.group("link_url")
         url = match.group("url")
         bold_text = match.group("bold_text")
 
-        if url:
+        if link_text and link_url:
+            display = escape_markdown_v2(link_text)
+            result.append(f"[{display}]({link_url})")
+        elif url:
             display = escape_markdown_v2(url)
             result.append(f"[{display}]({url})")
         elif bold_text:
@@ -72,6 +81,22 @@ def _format_inline(text: str) -> str:
         result.append(escape_markdown_v2(text[last_index:]))
 
     return "".join(result)
+
+
+def _format_line(content: str) -> str:
+    if content.startswith("# "):
+        inner = _format_inline(content[2:].lstrip())
+        return f"__*{inner}*__"
+    if content.startswith("## "):
+        inner = _format_inline(content[3:].lstrip())
+        return f"*{inner}*"
+    if content.startswith("### "):
+        inner = _format_inline(content[4:].lstrip())
+        return f"_{inner}_"
+    if content.startswith(("- ", "* ")):
+        marker, rest = content[:2], content[2:]
+        return f"{marker}{_format_inline(rest)}"
+    return _format_inline(content)
 
 
 def format_for_markdown_v2(text: str) -> str:
@@ -95,21 +120,17 @@ def format_for_markdown_v2(text: str) -> str:
             content = line[:-1]
             newline = line[-1]
 
-        if content.startswith("# "):
-            inner = _format_inline(content[2:].lstrip())
-            formatted = f"__*{inner}*__"
-        elif content.startswith("## "):
-            inner = _format_inline(content[3:].lstrip())
-            formatted = f"*{inner}*"
-        else:
-            formatted = _format_inline(content)
-
-        formatted_lines.append(f"{formatted}{newline}")
+        formatted_lines.append(f"{_format_line(content)}{newline}")
 
     return "".join(formatted_lines)
 
 
 async def forward_text_to_chat(chat_id: int, text: str) -> None:
+    if DRY_RUN:
+        formatted = format_for_markdown_v2(text)
+        logging.info("DRY_RUN enabled. chat_id=%s, formatted_text=%s", chat_id, formatted)
+        return
+
     payload = {
         "chat_id": chat_id,
         "text": format_for_markdown_v2(text),
