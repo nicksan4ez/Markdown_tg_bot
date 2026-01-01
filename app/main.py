@@ -263,7 +263,13 @@ def apply_entities(text: str, entities: Optional[list[Dict[str, Any]]]) -> str:
     return result
 
 
-async def handle_message(chat_id: int, sender: Dict[str, Any], text: str) -> None:
+async def handle_message(
+    chat_id: int,
+    sender: Dict[str, Any],
+    text: str,
+    *,
+    log_entry: bool = True,
+) -> None:
     formatted = format_for_markdown_v2(text)
     chunks = split_message(formatted)
 
@@ -276,11 +282,13 @@ async def handle_message(chat_id: int, sender: Dict[str, Any], text: str) -> Non
         )
         return
 
-    log_in = format_log_entry("IN", chat_id, sender, formatted)
-    await send_chunks(LOGS_CHAT_ID_INT, split_message(log_in))
+    if log_entry:
+        log_in = format_log_entry("IN", chat_id, sender, formatted)
+        await send_chunks(LOGS_CHAT_ID_INT, split_message(log_in))
     await send_chunks(chat_id, chunks)
-    log_out = format_log_entry("OUT", chat_id, sender, formatted)
-    await send_chunks(LOGS_CHAT_ID_INT, split_message(log_out))
+    if log_entry:
+        log_out = format_log_entry("OUT", chat_id, sender, formatted)
+        await send_chunks(LOGS_CHAT_ID_INT, split_message(log_out))
 
 
 def extract_message(update: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -383,7 +391,7 @@ async def telegram_webhook(request: Request, background_tasks: BackgroundTasks) 
         text = apply_entities(text, entities)
         if is_command(text, "/start") or is_command(text, "/help"):
             help_text = build_help_text()
-            background_tasks.add_task(handle_message, chat_id, sender, help_text)
+            background_tasks.add_task(handle_message, chat_id, sender, help_text, log_entry=False)
         else:
             background_tasks.add_task(handle_message, chat_id, sender, text)
 
