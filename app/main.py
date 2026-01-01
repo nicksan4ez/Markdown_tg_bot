@@ -22,19 +22,27 @@ if load_dotenv:
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
+LOGS_CHAT_ID = os.getenv("LOGS_CHAT_ID")
 BASE_URL = os.getenv("BASE_URL")
 DRY_RUN = os.getenv("DRY_RUN", "").lower() in {"1", "true", "yes"}
 
 for env_name, value in (
     ("BOT_TOKEN", BOT_TOKEN),
     ("WEBHOOK_SECRET", WEBHOOK_SECRET),
+    ("LOGS_CHAT_ID", LOGS_CHAT_ID),
 ):
     if not value:
         raise RuntimeError(f"Environment variable {env_name} is required.")
 
+try:
+    LOGS_CHAT_ID_INT = int(LOGS_CHAT_ID)
+except (TypeError, ValueError) as exc:
+    raise RuntimeError("Environment variable LOGS_CHAT_ID must be an integer.") from exc
+
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 MARKDOWN_V2_SPECIAL_CHARS = r"_*[]()~`>#+-=|{}.!\\"
 _ESCAPE_PATTERN = re.compile(f"([{re.escape(MARKDOWN_V2_SPECIAL_CHARS)}])")
+_URL_ESCAPE_PATTERN = re.compile(r"([)\\])")
 _TOKEN_PATTERN = re.compile(
     r"(?P<link>\[(?P<link_text>[^\]]+)\]\((?P<link_url>https?://[^\s)]+)\))"
     r"|(?P<bold>\*\*(?P<bold_text>.+?)\*\*)"
@@ -48,6 +56,11 @@ app = FastAPI()
 def escape_markdown_v2(text: str) -> str:
     """Escape characters that have special meaning in MarkdownV2."""
     return _ESCAPE_PATTERN.sub(r"\\\1", text)
+
+
+def escape_markdown_v2_url(url: str) -> str:
+    """Escape characters that have special meaning in MarkdownV2 URLs."""
+    return _URL_ESCAPE_PATTERN.sub(r"\\\1", url)
 
 
 def _format_inline(text: str) -> str:
@@ -67,10 +80,10 @@ def _format_inline(text: str) -> str:
 
         if link_text and link_url:
             display = escape_markdown_v2(link_text)
-            result.append(f"[{display}]({link_url})")
+            result.append(f"[{display}]({escape_markdown_v2_url(link_url)})")
         elif url:
             display = escape_markdown_v2(url)
-            result.append(f"[{display}]({url})")
+            result.append(f"[{display}]({escape_markdown_v2_url(url)})")
         elif bold_text:
             inner = escape_markdown_v2(bold_text)
             result.append(f"*{inner}*")
@@ -83,29 +96,13 @@ def _format_inline(text: str) -> str:
     return "".join(result)
 
 
-def _format_line(content: str) -> str:
-    if content.startswith("# "):
-        inner = _format_inline(content[2:].lstrip())
-        return f"__*{inner}*__"
-    if content.startswith("## "):
-        inner = _format_inline(content[3:].lstrip())
-        return f"*{inner}*"
-    if content.startswith("### "):
-        inner = _format_inline(content[4:].lstrip())
-        return f"_{inner}_"
-    if content.startswith(("- ", "* ")):
-        marker, rest = content[:2], content[2:]
-        return f"{marker}{_format_inline(rest)}"
-    return _format_inline(content)
-
-
 def format_for_markdown_v2(text: str) -> str:
     """
     Prepare text for Telegram MarkdownV2:
-    - headings: "# " -> bold+underline, "## " -> bold (each from new line)
     - escape special characters
     - make bare URLs clickable
     - support **bold** (converted to Telegram *bold*)
+    - keep line breaks intact
     """
     lines = text.splitlines(keepends=True)
     formatted_lines: list[str] = []
@@ -120,39 +117,52 @@ def format_for_markdown_v2(text: str) -> str:
             content = line[:-1]
             newline = line[-1]
 
-        formatted_lines.append(f"{_format_line(content)}{newline}")
+        formatted_lines.append(f"{_format_inline(content)}{newline}")
 
     return "".join(formatted_lines)
 
 
-async def forward_text_to_chat(chat_id: int, text: str) -> None:
-    formatted = format_for_markdown_v2(text)
+async def send_chunks(chat_id: int, chunks: list[str]) -> None:
+    async with httpx.AsyncClient(timeout=10) as client:
+        for chunk in chunks:
+            payload = {
+                "chat_id": chat_id,
+                "text": chunk,
+                "parse_mode": "MarkdownV2",
+            }
 
-    if DRY_RUN:
-        logging.info("DRY_RUN enabled. chat_id=%s, formatted_text=%s", chat_id, formatted)
-        return
-
-    for chunk in split_message(formatted):
-        payload = {
-            "chat_id": chat_id,
-            "text": chunk,
-            "parse_mode": "MarkdownV2",
-        }
-
-        try:
-            async with httpx.AsyncClient(timeout=10) as client:
+            try:
                 response = await client.post(TELEGRAM_API_URL, json=payload)
                 response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            logging.error(
-                "Telegram API error: status=%s body=%s",
-                exc.response.status_code,
-                exc.response.text,
-            )
-            break
-        except httpx.HTTPError as exc:
-            logging.exception("Failed to send message to Telegram: %s", exc)
-            break
+            except httpx.HTTPStatusError as exc:
+                logging.error(
+                    "Telegram API error: chat_id=%s status=%s body=%s",
+                    chat_id,
+                    exc.response.status_code,
+                    exc.response.text,
+                )
+                break
+            except httpx.HTTPError as exc:
+                logging.exception("Failed to send message to Telegram: %s", exc)
+                break
+
+
+async def handle_message(chat_id: int, text: str) -> None:
+    formatted = format_for_markdown_v2(text)
+    chunks = split_message(formatted)
+
+    if DRY_RUN:
+        logging.info(
+            "DRY_RUN enabled. chat_id=%s logs_chat_id=%s formatted_text=%s",
+            chat_id,
+            LOGS_CHAT_ID_INT,
+            formatted,
+        )
+        return
+
+    await send_chunks(LOGS_CHAT_ID_INT, chunks)
+    await send_chunks(chat_id, chunks)
+    await send_chunks(LOGS_CHAT_ID_INT, chunks)
 
 
 def extract_text(update: Dict[str, Any]) -> Optional[str]:
@@ -229,6 +239,6 @@ async def telegram_webhook(request: Request, background_tasks: BackgroundTasks) 
     chat_id = extract_chat_id(update)
 
     if text and chat_id is not None:
-        background_tasks.add_task(forward_text_to_chat, chat_id, text)
+        background_tasks.add_task(handle_message, chat_id, text)
 
     return {"ok": True}
