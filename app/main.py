@@ -143,6 +143,13 @@ async def forward_text_to_chat(chat_id: int, text: str) -> None:
             async with httpx.AsyncClient(timeout=10) as client:
                 response = await client.post(TELEGRAM_API_URL, json=payload)
                 response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            logging.error(
+                "Telegram API error: status=%s body=%s",
+                exc.response.status_code,
+                exc.response.text,
+            )
+            break
         except httpx.HTTPError as exc:
             logging.exception("Failed to send message to Telegram: %s", exc)
             break
