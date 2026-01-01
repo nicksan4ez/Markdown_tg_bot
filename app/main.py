@@ -46,6 +46,7 @@ _URL_ESCAPE_PATTERN = re.compile(r"([)\\])")
 _TOKEN_PATTERN = re.compile(
     r"(?P<link>\[(?P<link_text>[^\]]+)\]\((?P<link_url>https?://[^\s)]+)\))"
     r"|(?P<code>`(?P<code_text>[^`]+)`)"
+    r"|(?P<bold_italic>\*\*\*(?P<bold_italic_text>.+?)\*\*\*)"
     r"|(?P<bold>\*\*(?P<bold_text>.+?)\*\*)"
     r"|(?P<italic>(?<!\*)\*(?P<italic_text>[^*\n]+?)\*(?!\*))"
     r"|(?P<url>https?://\S+)",
@@ -83,6 +84,7 @@ def _format_inline(text: str) -> str:
         link_text = match.group("link_text")
         link_url = match.group("link_url")
         url = match.group("url")
+        bold_italic_text = match.group("bold_italic_text")
         bold_text = match.group("bold_text")
         italic_text = match.group("italic_text")
         code_text = match.group("code_text")
@@ -96,6 +98,9 @@ def _format_inline(text: str) -> str:
         elif url:
             display = escape_markdown_v2(url)
             result.append(f"[{display}]({escape_markdown_v2_url(url)})")
+        elif bold_italic_text:
+            inner = escape_markdown_v2(bold_italic_text)
+            result.append(f"*_{inner}_*")
         elif bold_text:
             inner = escape_markdown_v2(bold_text)
             result.append(f"*{inner}*")
@@ -124,6 +129,9 @@ def _format_line(content: str) -> str:
     if content.startswith("### "):
         inner = _format_inline(content[4:].lstrip())
         return f"__{inner}__"
+    if content.startswith("> "):
+        inner = _format_inline(content[2:].lstrip())
+        return f"> {inner}"
     if content.startswith(("- ", "* ")):
         rest = content[2:]
         return f"— {_format_inline(rest)}"
@@ -182,8 +190,10 @@ def build_help_text() -> str:
         "## Примеры\n"
         "- **жирный текст**\n"
         "- *курсив*\n"
-        "- `super code`\n"
-        "- [Ссылка](https://t.me/mark_down_robot)\n"
+        "- ***жирный курсив***\n"
+        "- `netstat -aon | findstr :8188`\n"
+        "- [https://openai.com/research](https://openai.com/research)\n"
+        "- > цитата\n"
         "- --- (разделитель)\n"
     )
 
