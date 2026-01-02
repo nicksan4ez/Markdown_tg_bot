@@ -436,9 +436,16 @@ def format_sender(sender: Dict[str, Any], chat_id: int) -> str:
     return display or f"user {chat_id}"
 
 
-def format_log_entry(kind: str, chat_id: int, sender: Dict[str, Any], formatted_text: str) -> str:
-    prefix = f"{kind} {format_sender(sender, chat_id)} ({chat_id})"
-    return f"{escape_markdown_v2(prefix)}\n{formatted_text}"
+def format_log_header(kind: str, sender: Dict[str, Any], chat_id: int) -> str:
+    display = format_sender(sender, chat_id)
+    user_id = sender.get("id")
+    if user_id is not None:
+        name = escape_markdown_v2(display)
+        link = f"tg://user?id={user_id}"
+        header = f"{kind} [{name}]({escape_markdown_v2_url(link)}) ({chat_id})"
+    else:
+        header = f"{kind} {escape_markdown_v2(display)} ({chat_id})"
+    return header
 
 
 def _utf16_offset_to_index(text: str, offset: int) -> int:
@@ -494,6 +501,7 @@ async def handle_message(
     chat_id: int,
     sender: Dict[str, Any],
     text: str,
+    raw_text: Optional[str],
     *,
     log_entry: bool = True,
 ) -> None:
@@ -510,12 +518,15 @@ async def handle_message(
         return
 
     if log_entry:
-        log_in = format_log_entry("IN", chat_id, sender, formatted)
-        await send_chunks(LOGS_CHAT_ID_INT, split_message(log_in))
+        header = format_log_header("IN", sender, chat_id)
+        await send_chunks(LOGS_CHAT_ID_INT, split_message(header))
+        if raw_text:
+            await send_chunks(LOGS_CHAT_ID_INT, split_message(raw_text))
     await send_chunks(chat_id, chunks)
     if log_entry:
-        log_out = format_log_entry("OUT", chat_id, sender, formatted)
+        log_out = format_log_header("OUT", sender, chat_id)
         await send_chunks(LOGS_CHAT_ID_INT, split_message(log_out))
+        await send_chunks(LOGS_CHAT_ID_INT, chunks)
 
 
 def extract_message(update: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -615,12 +626,13 @@ async def telegram_webhook(request: Request, background_tasks: BackgroundTasks) 
         return {"ok": True}
 
     if text and chat_id is not None:
+        raw_text = text
         text = apply_entities(text, entities)
         text = apply_reference_links(text)
         if is_command(text, "/start") or is_command(text, "/help"):
             help_text = build_help_text()
-            background_tasks.add_task(handle_message, chat_id, sender, help_text, log_entry=False)
+            background_tasks.add_task(handle_message, chat_id, sender, help_text, None, log_entry=False)
         else:
-            background_tasks.add_task(handle_message, chat_id, sender, text)
+            background_tasks.add_task(handle_message, chat_id, sender, text, raw_text)
 
     return {"ok": True}
