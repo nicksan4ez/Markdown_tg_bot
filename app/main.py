@@ -366,9 +366,6 @@ def apply_entities(text: str, entities: Optional[list[Dict[str, Any]]]) -> str:
     if not entities:
         return text
 
-    has_double_ast = "**" in text
-    has_single_ast = "*" in text
-
     inserts: list[tuple[int, str]] = []
     for entity in entities:
         entity_type = entity.get("type")
@@ -381,14 +378,10 @@ def apply_entities(text: str, entities: Optional[list[Dict[str, Any]]]) -> str:
         start = _utf16_offset_to_index(text, offset)
         end = _utf16_offset_to_index(text, offset + length)
         if entity_type == "bold":
-            if has_double_ast:
-                continue
             marker = "**"
             inserts.append((end, marker))
             inserts.append((start, marker))
         elif entity_type == "italic":
-            if has_single_ast:
-                continue
             marker = "*"
             inserts.append((end, marker))
             inserts.append((start, marker))
