@@ -55,7 +55,9 @@ _TOKEN_PATTERN = re.compile(
 _TABLE_SEPARATOR_PATTERN = re.compile(r"^\s*\|?[\s:-]+\|[\s|:-]*$")
 _LIST_ITEM_PATTERN = re.compile(r"^(?P<indent>[ \t]*)(?P<marker>[-*])\s+(?P<body>.*)$")
 _CHECKBOX_PATTERN = re.compile(r"^\[(?P<state>[ xX])\]\s+(?P<text>.*)$")
-_LIST_MARKERS = ("—", "·", "▸", "▹")
+_LIST_MARKERS = ("\u2014", "\u00b7", "\u25b8", "\u25b9")
+_REFERENCE_LINK_PATTERN = re.compile(r"\[(\d+)\]\(([^)]+)\)")
+_INLINE_REFERENCE_PATTERN = re.compile(r"\[(\d+)\](?!\()")
 
 app = FastAPI()
 
@@ -73,6 +75,87 @@ def escape_markdown_v2_url(url: str) -> str:
 def escape_markdown_v2_code(text: str) -> str:
     """Escape characters that have special meaning in MarkdownV2 code spans."""
     return text.replace("\\", "\\\\").replace("`", "\\`")
+
+
+def _extract_reference_links(lines: list[str]) -> tuple[list[str], dict[str, str]]:
+    ref_map: dict[str, str] = {}
+    index = len(lines) - 1
+    found_refs = False
+
+    while index >= 0:
+        raw_line = lines[index]
+        line = raw_line.rstrip("\r\n")
+        if not line.strip():
+            index -= 1
+            continue
+
+        matches = list(_REFERENCE_LINK_PATTERN.finditer(line))
+        if matches:
+            for match in matches:
+                ref_map[match.group(1)] = match.group(2)
+            cleaned = _REFERENCE_LINK_PATTERN.sub("", line)
+            if cleaned.strip() == "":
+                found_refs = True
+                index -= 1
+                continue
+
+        break
+
+    if not found_refs:
+        return lines, {}
+
+    return lines[: index + 1], ref_map
+
+
+def _replace_inline_references(text: str, ref_map: dict[str, str]) -> str:
+    if not ref_map:
+        return text
+
+    def replacer(match: re.Match[str]) -> str:
+        key = match.group(1)
+        url = ref_map.get(key)
+        if not url:
+            return match.group(0)
+        return f"[{key}]({url})"
+
+    lines = text.splitlines(keepends=True)
+    out: list[str] = []
+    in_code_block = False
+
+    for line in lines:
+        newline = ""
+        content = line
+        if line.endswith("\r\n"):
+            content = line[:-2]
+            newline = "\r\n"
+        elif line.endswith("\n") or line.endswith("\r"):
+            content = line[:-1]
+            newline = line[-1]
+
+        if content.strip().startswith("```"):
+            in_code_block = not in_code_block
+            out.append(f"{content}{newline}")
+            continue
+
+        if in_code_block:
+            out.append(f"{content}{newline}")
+            continue
+
+        parts = content.split("`")
+        for idx in range(0, len(parts), 2):
+            parts[idx] = _INLINE_REFERENCE_PATTERN.sub(replacer, parts[idx])
+        out.append(f"{'`'.join(parts)}{newline}")
+
+    return "".join(out)
+
+
+def apply_reference_links(text: str) -> str:
+    lines = text.splitlines(keepends=True)
+    kept_lines, ref_map = _extract_reference_links(lines)
+    if not ref_map:
+        return text
+    merged = "".join(kept_lines)
+    return _replace_inline_references(merged, ref_map)
 
 
 def _normalize_indent(indent: str) -> int:
@@ -96,7 +179,7 @@ def _format_list_item(content: str) -> Optional[str]:
     marker = _LIST_MARKERS[level]
     prefix = f"{'  ' * level}{marker} "
     if checkbox is not None:
-        prefix += "☑️ " if checkbox.lower() == "x" else "🔲 "
+        prefix += "\u2611 " if checkbox.lower() == "x" else "\u2610 "
 
     return f"{prefix}{_format_inline(body)}"
 
@@ -528,6 +611,7 @@ async def telegram_webhook(request: Request, background_tasks: BackgroundTasks) 
 
     if text and chat_id is not None:
         text = apply_entities(text, entities)
+        text = apply_reference_links(text)
         if is_command(text, "/start") or is_command(text, "/help"):
             help_text = build_help_text()
             background_tasks.add_task(handle_message, chat_id, sender, help_text, log_entry=False)
