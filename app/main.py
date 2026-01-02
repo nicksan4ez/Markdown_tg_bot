@@ -58,6 +58,8 @@ _CHECKBOX_PATTERN = re.compile(r"^\[(?P<state>[ xX])\]\s+(?P<text>.*)$")
 _LIST_MARKERS = ("\u2014", "\u00b7", "\u25b8", "\u25b9")
 _REFERENCE_LINK_PATTERN = re.compile(r"\[(\d+)\]\(([^)]+)\)")
 _INLINE_REFERENCE_PATTERN = re.compile(r"\[(\d+)\](?!\()")
+_LBRACK_TOKEN = "LBRACKTOKEN"
+_RBRACK_TOKEN = "RBRACKTOKEN"
 
 app = FastAPI()
 
@@ -116,7 +118,7 @@ def _replace_inline_references(text: str, ref_map: dict[str, str]) -> str:
         url = ref_map.get(key)
         if not url:
             return match.group(0)
-        return f"[[{key}]({url})]"
+        return f"{_LBRACK_TOKEN}[{key}]({url}){_RBRACK_TOKEN}"
 
     lines = text.splitlines(keepends=True)
     out: list[str] = []
@@ -346,7 +348,10 @@ def format_for_markdown_v2(text: str) -> str:
         formatted_lines.append(f"{_format_line(content)}{newline}")
         index += 1
 
-    return "".join(formatted_lines)
+    rendered = "".join(formatted_lines)
+    rendered = rendered.replace(_LBRACK_TOKEN, r"\[")
+    rendered = rendered.replace(_RBRACK_TOKEN, r"\]")
+    return rendered
 
 
 def is_command(text: str, command: str) -> bool:
