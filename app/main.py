@@ -116,7 +116,7 @@ def _replace_inline_references(text: str, ref_map: dict[str, str]) -> str:
         url = ref_map.get(key)
         if not url:
             return match.group(0)
-        return f"[{key}]({url})"
+        return f"[[{key}]({url})]"
 
     lines = text.splitlines(keepends=True)
     out: list[str] = []
