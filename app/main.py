@@ -276,10 +276,10 @@ def _format_line(content: str) -> str:
         return list_item
     if content.startswith("# "):
         inner = _format_inline(content[2:].lstrip())
-        return f"__*{inner}*__"
+        return f"__*_{inner}_*__"
     if content.startswith("## "):
         inner = _format_inline(content[3:].lstrip())
-        return f"*{inner}*"
+        return f"__*{inner}*__"
     if content.startswith("### "):
         inner = _format_inline(content[4:].lstrip())
         return f"__{inner}__"
