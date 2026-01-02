@@ -52,6 +52,10 @@ _TOKEN_PATTERN = re.compile(
     r"|(?P<url>https?://\S+)",
     re.IGNORECASE,
 )
+_TABLE_SEPARATOR_PATTERN = re.compile(r"^\s*\|?[\s:-]+\|[\s|:-]*$")
+_LIST_ITEM_PATTERN = re.compile(r"^(?P<indent>[ \t]*)(?P<marker>[-*])\s+(?P<body>.*)$")
+_CHECKBOX_PATTERN = re.compile(r"^\[(?P<state>[ xX])\]\s+(?P<text>.*)$")
+_LIST_MARKERS = ("—", "·", "▸", "▹")
 
 app = FastAPI()
 
@@ -69,6 +73,70 @@ def escape_markdown_v2_url(url: str) -> str:
 def escape_markdown_v2_code(text: str) -> str:
     """Escape characters that have special meaning in MarkdownV2 code spans."""
     return text.replace("\\", "\\\\").replace("`", "\\`")
+
+
+def _normalize_indent(indent: str) -> int:
+    return len(indent.replace("\t", "    "))
+
+
+def _format_list_item(content: str) -> Optional[str]:
+    match = _LIST_ITEM_PATTERN.match(content)
+    if not match:
+        return None
+
+    indent = match.group("indent")
+    body = match.group("body")
+    checkbox_match = _CHECKBOX_PATTERN.match(body)
+    checkbox = None
+    if checkbox_match:
+        checkbox = checkbox_match.group("state")
+        body = checkbox_match.group("text")
+
+    level = min(_normalize_indent(indent) // 2, len(_LIST_MARKERS) - 1)
+    marker = _LIST_MARKERS[level]
+    prefix = f"{'  ' * level}{marker} "
+    if checkbox is not None:
+        prefix += "☑ " if checkbox.lower() == "x" else "☐ "
+
+    return f"{prefix}{_format_inline(body)}"
+
+
+def _split_table_row(line: str) -> list[str]:
+    stripped = line.strip()
+    if stripped.startswith("|"):
+        stripped = stripped[1:]
+    if stripped.endswith("|"):
+        stripped = stripped[:-1]
+    return [cell.strip() for cell in stripped.split("|")]
+
+
+def _format_table_block(lines: list[str]) -> list[str]:
+    rows: list[list[str]] = []
+    for line in lines:
+        rows.append(_split_table_row(line))
+
+    if not rows:
+        return []
+
+    col_count = max(len(row) for row in rows)
+    widths = [0] * col_count
+    for row in rows:
+        for idx in range(col_count):
+            cell = row[idx] if idx < len(row) else ""
+            widths[idx] = max(widths[idx], len(cell))
+
+    def render_row(row: list[str]) -> str:
+        padded = []
+        for idx in range(col_count):
+            cell = row[idx] if idx < len(row) else ""
+            padded.append(cell.ljust(widths[idx]))
+        return "| " + " | ".join(padded) + " |"
+
+    rendered = [render_row(rows[0])]
+    rendered.append("| " + " | ".join("-" * width for width in widths) + " |")
+    for row in rows[1:]:
+        rendered.append(render_row(row))
+    return rendered
 
 
 def _format_inline(text: str) -> str:
@@ -120,6 +188,9 @@ def _format_line(content: str) -> str:
     stripped = content.strip()
     if stripped == "---":
         return r"\=\=\=\=\=\=\=\=\=\="
+    list_item = _format_list_item(content)
+    if list_item is not None:
+        return list_item
     if content.startswith("# "):
         inner = _format_inline(content[2:].lstrip())
         return f"__*{inner}*__"
@@ -132,9 +203,6 @@ def _format_line(content: str) -> str:
     if content.startswith("> "):
         inner = _format_inline(content[2:].lstrip())
         return f"> {inner}"
-    if content.startswith(("- ", "* ")):
-        rest = content[2:]
-        return f"— {_format_inline(rest)}"
     return _format_inline(content)
 
 
@@ -149,8 +217,10 @@ def format_for_markdown_v2(text: str) -> str:
     lines = text.splitlines(keepends=True)
     formatted_lines: list[str] = []
     in_code_block = False
+    index = 0
 
-    for line in lines:
+    while index < len(lines):
+        line = lines[index]
         newline = ""
         content = line
         if line.endswith("\r\n"):
@@ -163,13 +233,35 @@ def format_for_markdown_v2(text: str) -> str:
         if content.strip().startswith("```"):
             in_code_block = not in_code_block
             formatted_lines.append(f"{content}{newline}")
+            index += 1
             continue
 
         if in_code_block:
             formatted_lines.append(f"{escape_markdown_v2_code(content)}{newline}")
+            index += 1
             continue
 
+        if "|" in content and index + 1 < len(lines):
+            next_line = lines[index + 1]
+            next_content = next_line.rstrip("\r\n")
+            if "|" in next_content and _TABLE_SEPARATOR_PATTERN.match(next_content):
+                table_lines = [content]
+                index += 2
+                while index < len(lines):
+                    candidate = lines[index].rstrip("\r\n")
+                    if "|" not in candidate:
+                        break
+                    table_lines.append(candidate)
+                    index += 1
+                rendered = _format_table_block(table_lines)
+                formatted_lines.append("```\n")
+                for rendered_line in rendered:
+                    formatted_lines.append(f"{escape_markdown_v2_code(rendered_line)}\n")
+                formatted_lines.append(f"```{newline}")
+                continue
+
         formatted_lines.append(f"{_format_line(content)}{newline}")
+        index += 1
 
     return "".join(formatted_lines)
 
@@ -187,7 +279,7 @@ def build_help_text() -> str:
         "# Быстрый старт\n"
         "Я пересылаю ваш текст обратно и конвертирую Markdown в Telegram MarkdownV2.\n"
         "\n"
-        "## Примеры\n"
+        "## Примеры форматирования\n"
         "- **жирный текст**\n"
         "- *курсив*\n"
         "- ***жирный курсив***\n"
@@ -195,6 +287,22 @@ def build_help_text() -> str:
         "- [Ссылка](https://t.me/mark_down_robot)\n"
         "- > цитата\n"
         "- --- (разделитель)\n"
+        "\n"
+        "## Списки\n"
+        "- пункт\n"
+        "  - вложенный пункт\n"
+        "    - еще глубже\n"
+        "\n"
+        "## Чекбоксы\n"
+        "- [ ] задача\n"
+        "- [x] выполнено\n"
+        "\n"
+        "## Таблица\n"
+        "| Колонка | Значение |\n"
+        "| --- | --- |\n"
+        "| A | 10 |\n"
+        "| B | 20 |\n"
+        "\n"
     )
 
 
