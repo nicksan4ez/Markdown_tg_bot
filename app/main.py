@@ -191,8 +191,8 @@ def build_help_text() -> str:
         "- **жирный текст**\n"
         "- *курсив*\n"
         "- ***жирный курсив***\n"
-        "- `netstat -aon | findstr :8188`\n"
-        "- [https://openai.com/research](https://openai.com/research)\n"
+        "- `super code`\n"
+        "- [Ссылка](https://t.me/mark_down_robot)\n"
         "- > цитата\n"
         "- --- (разделитель)\n"
     )
