@@ -394,14 +394,15 @@ def build_help_text() -> str:
     )
 
 
-async def send_chunks(chat_id: int, chunks: list[str]) -> None:
+async def send_chunks(chat_id: int, chunks: list[str], parse_mode: Optional[str] = "MarkdownV2") -> None:
     async with httpx.AsyncClient(timeout=10) as client:
         for chunk in chunks:
             payload = {
                 "chat_id": chat_id,
                 "text": chunk,
-                "parse_mode": "MarkdownV2",
             }
+            if parse_mode:
+                payload["parse_mode"] = parse_mode
 
             try:
                 response = await client.post(TELEGRAM_API_URL, json=payload)
@@ -439,12 +440,14 @@ def format_sender(sender: Dict[str, Any], chat_id: int) -> str:
 def format_log_header(kind: str, sender: Dict[str, Any], chat_id: int) -> str:
     display = format_sender(sender, chat_id)
     user_id = sender.get("id")
+    kind_text = escape_markdown_v2(kind)
+    name = escape_markdown_v2(display)
+    chat_text = escape_markdown_v2(str(chat_id))
     if user_id is not None:
-        name = escape_markdown_v2(display)
         link = f"tg://user?id={user_id}"
-        header = f"{kind} [{name}]({escape_markdown_v2_url(link)}) ({chat_id})"
+        header = f"{kind_text} [{name}]({escape_markdown_v2_url(link)}) \\({chat_text}\\)"
     else:
-        header = f"{kind} {escape_markdown_v2(display)} ({chat_id})"
+        header = f"{kind_text} {name} \\({chat_text}\\)"
     return header
 
 
@@ -521,7 +524,7 @@ async def handle_message(
         header = format_log_header("IN", sender, chat_id)
         await send_chunks(LOGS_CHAT_ID_INT, split_message(header))
         if raw_text:
-            await send_chunks(LOGS_CHAT_ID_INT, split_message(raw_text))
+            await send_chunks(LOGS_CHAT_ID_INT, split_message(raw_text), parse_mode=None)
     await send_chunks(chat_id, chunks)
     if log_entry:
         log_out = format_log_header("OUT", sender, chat_id)
