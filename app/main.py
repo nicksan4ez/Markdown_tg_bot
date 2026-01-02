@@ -96,7 +96,7 @@ def _format_list_item(content: str) -> Optional[str]:
     marker = _LIST_MARKERS[level]
     prefix = f"{'  ' * level}{marker} "
     if checkbox is not None:
-        prefix += "☑ " if checkbox.lower() == "x" else "☐ "
+        prefix += "☑️ " if checkbox.lower() == "x" else "🔲 "
 
     return f"{prefix}{_format_inline(body)}"
 
